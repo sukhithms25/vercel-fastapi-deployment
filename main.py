@@ -7,7 +7,7 @@ from app.routers import main, items
 from app.database import engine, Base
 from app.models import ItemModel  # noqa: F401 – ensures model is registered
 import os
-
+print("hello")
 try:
     import yt_dlp
 except ImportError:
