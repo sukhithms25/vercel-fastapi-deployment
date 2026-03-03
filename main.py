@@ -1,12 +1,28 @@
 from time import time
-from fastapi import FastAPI, __version__
+from fastapi import FastAPI, __version__, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from app.routers import main
+from fastapi.responses import HTMLResponse, FileResponse
+from pydantic import BaseModel
+from app.routers import main, items
+from app.database import engine, Base
+from app.models import ItemModel  # noqa: F401 – ensures model is registered
+import os
+
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(main.router)
+app.include_router(items.router)
+
+
+@app.on_event("startup")
+def on_startup():
+    """Create all tables in the database if they don't exist."""
+    Base.metadata.create_all(bind=engine)
 
 html = f"""
 <!DOCTYPE html>
@@ -21,6 +37,7 @@ html = f"""
             <ul>
                 <li><a href="/docs">/docs</a></li>
                 <li><a href="/redoc">/redoc</a></li>
+                <li><a href="/crud">/crud</a></li>
             </ul>
             <p>Powered by <a href="https://vercel.com" target="_blank">Vercel</a></p>
         </div>
@@ -28,41 +45,45 @@ html = f"""
 </html>
 """
 
+
 @app.get("/")
 async def root():
     return HTMLResponse(html)
+
+
+@app.get("/crud")
+async def crud_page():
+    return FileResponse("static/crud.html")
+
 
 @app.get('/ping')
 async def hello():
     return {'res': 'pong', 'version': __version__, "time": time()}
 
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-import yt_dlp
-import os
-
-
 class VideoURL(BaseModel):
     url: str
 
+
 def download_facebook_video(url: str):
+    if yt_dlp is None:
+        raise HTTPException(status_code=500, detail="yt-dlp is not installed")
+
     ydl_opts = {
-        'outtmpl': '%(id)s.%(ext)s',  # Use the video ID for the file name
-        'format': 'best',  # Download the best available format
-        'noplaylist': True,  # Ensure it's downloading only the video, not a playlist
+        'outtmpl': '%(id)s.%(ext)s',
+        'format': 'best',
+        'noplaylist': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)  # Download the video
+            info_dict = ydl.extract_info(url, download=True)
             video_id = info_dict.get('id', None)
             video_ext = info_dict.get('ext', 'mp4')
-            video_file = f"{video_id}.{video_ext}"  # Construct file name
+            video_file = f"{video_id}.{video_ext}"
 
             if os.path.exists(video_file):
-                return video_file  # Return the path to the downloaded file
+                return video_file
             else:
                 raise HTTPException(status_code=500, detail="Video file not found after download.")
     except yt_dlp.utils.DownloadError as e:
@@ -72,13 +93,9 @@ def download_facebook_video(url: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
+
 @app.post("/download")
 async def download_video(video: VideoURL):
     video_file = download_facebook_video(video.url)
-    
-    # Return the video file as a response
     return FileResponse(video_file, media_type="video/mp4", filename=os.path.basename(video_file))
 
-@app.get("/")
-async def root():
-    return {"message": "Hello, World!"}
